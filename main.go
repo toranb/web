@@ -44,16 +44,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Ensure Firefox and geckodriver are installed
-	err := ensureFirefox()
+	// Ensure Chrome and chromedriver are installed
+	err := ensureChrome()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error setting up Firefox: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error setting up Chrome: %v\n", err)
 		os.Exit(1)
 	}
 
-	err = ensureGeckodriver()
+	err = ensureChromedriver()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error setting up geckodriver: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error setting up chromedriver: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -67,115 +67,160 @@ func main() {
 	fmt.Println(result)
 }
 
-func ensureFirefox() error {
-	// Get home directory for our isolated Firefox installation
+func getChromePath() (string, error) {
+	// First, check for system Chrome installations
+	var systemChromePaths []string
+
+	switch runtime.GOOS {
+	case "darwin":
+		systemChromePaths = []string{
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			filepath.Join(os.Getenv("HOME"), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+		}
+	case "linux":
+		systemChromePaths = []string{
+			"/usr/bin/google-chrome",
+			"/usr/bin/google-chrome-stable",
+			"/usr/bin/chromium",
+			"/usr/bin/chromium-browser",
+		}
+	}
+
+	// Check if system Chrome exists
+	for _, path := range systemChromePaths {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+
+	// If no system Chrome, check for downloaded Chrome
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("could not get home directory: %v", err)
+	}
+
+	chromeDir := filepath.Join(homeDir, ".web-chrome")
+	var downloadedChromePath string
+
+	switch runtime.GOOS {
+	case "darwin":
+		if runtime.GOARCH == "arm64" {
+			downloadedChromePath = filepath.Join(chromeDir, "chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing")
+		} else {
+			downloadedChromePath = filepath.Join(chromeDir, "chrome-mac-x64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing")
+		}
+	case "linux":
+		downloadedChromePath = filepath.Join(chromeDir, "chrome-linux64", "chrome")
+	default:
+		return "", fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	}
+
+	return downloadedChromePath, nil
+}
+
+func ensureChrome() error {
+	chromePath, err := getChromePath()
+	if err != nil {
+		return err
+	}
+
+	// Check if Chrome executable exists (either system or downloaded)
+	if _, err := os.Stat(chromePath); err == nil {
+		return nil
+	}
+
+	// Download Chrome if not found
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("could not get home directory: %v", err)
 	}
 
-	firefoxDir := filepath.Join(homeDir, ".web-firefox")
-
-	// Platform-specific Firefox paths and URLs
-	var firefoxExec string
-	var firefoxUrl string
-	var firefoxSubdir string
+	chromeDir := filepath.Join(homeDir, ".web-chrome")
+	var chromeUrl string
 
 	switch runtime.GOOS {
 	case "darwin":
 		if runtime.GOARCH == "arm64" {
-			firefoxSubdir = "firefox"
-			firefoxExec = filepath.Join(firefoxDir, firefoxSubdir, "Nightly.app", "Contents", "MacOS", "firefox")
-			firefoxUrl = "https://playwright.azureedge.net/builds/firefox/1482/firefox-mac-arm64.zip"
+			chromeUrl = "https://storage.googleapis.com/chrome-for-testing-public/141.0.7390.77/mac-arm64/chrome-mac-arm64.zip"
 		} else {
-			firefoxSubdir = "firefox"
-			firefoxExec = filepath.Join(firefoxDir, firefoxSubdir, "Nightly.app", "Contents", "MacOS", "firefox")
-			firefoxUrl = "https://playwright.azureedge.net/builds/firefox/1482/firefox-mac.zip"
+			chromeUrl = "https://storage.googleapis.com/chrome-for-testing-public/141.0.7390.77/mac-x64/chrome-mac-x64.zip"
 		}
 	case "linux":
-		firefoxSubdir = "firefox"
-		firefoxExec = filepath.Join(firefoxDir, firefoxSubdir, "firefox", "firefox")
-		firefoxUrl = "https://playwright.azureedge.net/builds/firefox/1482/firefox-linux.zip"
+		chromeUrl = "https://storage.googleapis.com/chrome-for-testing-public/141.0.7390.77/linux64/chrome-linux64.zip"
 	default:
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
 
-	// Check if Firefox executable exists
-	if _, err := os.Stat(firefoxExec); err == nil {
-		return nil
-	}
-
-	// Download and extract Firefox
-	fmt.Println("Firefox not found, downloading...")
-	err = downloadFirefox(firefoxUrl, firefoxDir)
+	fmt.Println("Chrome not found, downloading...")
+	err = downloadChrome(chromeUrl, chromeDir)
 	if err != nil {
-		return fmt.Errorf("failed to download Firefox: %v", err)
+		return fmt.Errorf("failed to download Chrome: %v", err)
 	}
 
 	// Verify the executable exists after download
-	if _, err := os.Stat(firefoxExec); err != nil {
-		return fmt.Errorf("Firefox executable not found after download: %s", firefoxExec)
+	if _, err := os.Stat(chromePath); err != nil {
+		return fmt.Errorf("Chrome executable not found after download: %s", chromePath)
 	}
 
-	fmt.Printf("Firefox downloaded to: %s\n", firefoxDir)
+	fmt.Printf("Chrome downloaded to: %s\n", chromeDir)
 	return nil
 }
 
-func ensureGeckodriver() error {
+func ensureChromedriver() error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("could not get home directory: %v", err)
 	}
 
-	geckoDir := filepath.Join(homeDir, ".web-firefox", "geckodriver")
-	var geckoExec string
-	var geckoUrl string
+	chromeDriverDir := filepath.Join(homeDir, ".web-chrome", "chromedriver")
+	var chromeDriverExec string
+	var chromeDriverUrl string
 
 	switch runtime.GOOS {
 	case "darwin":
 		if runtime.GOARCH == "arm64" {
-			geckoExec = filepath.Join(geckoDir, "geckodriver")
-			geckoUrl = "https://github.com/mozilla/geckodriver/releases/download/v0.35.0/geckodriver-v0.35.0-macos-aarch64.tar.gz"
+			chromeDriverExec = filepath.Join(chromeDriverDir, "chromedriver-mac-arm64", "chromedriver")
+			chromeDriverUrl = "https://storage.googleapis.com/chrome-for-testing-public/141.0.7390.77/mac-arm64/chromedriver-mac-arm64.zip"
 		} else {
-			geckoExec = filepath.Join(geckoDir, "geckodriver")
-			geckoUrl = "https://github.com/mozilla/geckodriver/releases/download/v0.35.0/geckodriver-v0.35.0-macos.tar.gz"
+			chromeDriverExec = filepath.Join(chromeDriverDir, "chromedriver-mac-x64", "chromedriver")
+			chromeDriverUrl = "https://storage.googleapis.com/chrome-for-testing-public/141.0.7390.77/mac-x64/chromedriver-mac-x64.zip"
 		}
 	case "linux":
-		geckoExec = filepath.Join(geckoDir, "geckodriver")
-		geckoUrl = "https://github.com/mozilla/geckodriver/releases/download/v0.35.0/geckodriver-v0.35.0-linux64.tar.gz"
+		chromeDriverExec = filepath.Join(chromeDriverDir, "chromedriver-linux64", "chromedriver")
+		chromeDriverUrl = "https://storage.googleapis.com/chrome-for-testing-public/141.0.7390.77/linux64/chromedriver-linux64.zip"
 	default:
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
 
-	// Check if geckodriver exists
-	if _, err := os.Stat(geckoExec); err == nil {
+	// Check if chromedriver exists
+	if _, err := os.Stat(chromeDriverExec); err == nil {
 		return nil
 	}
 
-	// Download and extract geckodriver
-	fmt.Println("Geckodriver not found, downloading...")
-	err = downloadAndExtractTarGz(geckoUrl, geckoDir)
+	// Download and extract chromedriver
+	fmt.Println("Chromedriver not found, downloading...")
+	err = downloadAndExtractZip(chromeDriverUrl, chromeDriverDir)
 	if err != nil {
-		return fmt.Errorf("failed to download geckodriver: %v", err)
+		return fmt.Errorf("failed to download chromedriver: %v", err)
 	}
 
 	// Make executable
-	if err := os.Chmod(geckoExec, 0755); err != nil {
-		return fmt.Errorf("failed to make geckodriver executable: %v", err)
+	if err := os.Chmod(chromeDriverExec, 0755); err != nil {
+		return fmt.Errorf("failed to make chromedriver executable: %v", err)
 	}
 
-	fmt.Printf("Geckodriver downloaded to: %s\n", geckoDir)
+	fmt.Printf("Chromedriver downloaded to: %s\n", chromeDriverDir)
 	return nil
 }
 
-func downloadAndExtractTarGz(url, destDir string) error {
+func downloadAndExtractZip(url, destDir string) error {
 	// Create destination directory
 	err := os.MkdirAll(destDir, 0755)
 	if err != nil {
 		return fmt.Errorf("could not create directory %s: %v", destDir, err)
 	}
 
-	// Download the tar.gz file
+	// Download the zip file
 	fmt.Printf("Downloading from %s...\n", url)
 	resp, err := http.Get(url)
 	if err != nil {
@@ -188,103 +233,7 @@ func downloadAndExtractTarGz(url, destDir string) error {
 	}
 
 	// Create temporary file
-	tempFile, err := os.CreateTemp("", "geckodriver-*.tar.gz")
-	if err != nil {
-		return fmt.Errorf("could not create temp file: %v", err)
-	}
-	defer os.Remove(tempFile.Name())
-	defer tempFile.Close()
-
-	// Copy download to temp file
-	_, err = io.Copy(tempFile, resp.Body)
-	if err != nil {
-		return fmt.Errorf("could not save download: %v", err)
-	}
-
-	tempFile.Close()
-
-	// Extract using tar command
-	fmt.Println("Extracting geckodriver...")
-	return extractTarGz(tempFile.Name(), destDir)
-}
-
-func extractTarGz(src, dest string) error {
-	// Use system tar command for simplicity
-	cmd := fmt.Sprintf("tar -xzf %s -C %s", src, dest)
-	if err := runCommand(cmd); err != nil {
-		return fmt.Errorf("failed to extract tar.gz: %v", err)
-	}
-	return nil
-}
-
-func runCommand(cmd string) error {
-	// Simple command execution
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return fmt.Errorf("empty command")
-	}
-
-	proc := &os.Process{}
-	attr := &os.ProcAttr{
-		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
-	}
-
-	// Find the executable
-	executable, err := findExecutable(parts[0])
-	if err != nil {
-		return err
-	}
-
-	proc, err = os.StartProcess(executable, parts, attr)
-	if err != nil {
-		return err
-	}
-
-	state, err := proc.Wait()
-	if err != nil {
-		return err
-	}
-
-	if !state.Success() {
-		return fmt.Errorf("command failed: %s", cmd)
-	}
-
-	return nil
-}
-
-func findExecutable(name string) (string, error) {
-	// Simple path search
-	paths := []string{"/bin", "/usr/bin", "/usr/local/bin"}
-	for _, dir := range paths {
-		path := filepath.Join(dir, name)
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		}
-	}
-	return "", fmt.Errorf("executable not found: %s", name)
-}
-
-func downloadFirefox(url, destDir string) error {
-	// Create destination directory
-	err := os.MkdirAll(destDir, 0755)
-	if err != nil {
-		return fmt.Errorf("could not create directory %s: %v", destDir, err)
-	}
-
-	// Download the zip file
-	fmt.Printf("Downloading Firefox from %s...\n", url)
-	resp, err := http.Get(url)
-	if err != nil {
-		return fmt.Errorf("could not download Firefox: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("bad status: %s", resp.Status)
-	}
-
-	// Create temporary file
-	tempFile, err := os.CreateTemp("", "firefox-*.zip")
+	tempFile, err := os.CreateTemp("", "chromedriver-*.zip")
 	if err != nil {
 		return fmt.Errorf("could not create temp file: %v", err)
 	}
@@ -300,7 +249,47 @@ func downloadFirefox(url, destDir string) error {
 	tempFile.Close()
 
 	// Extract the zip file
-	fmt.Println("Extracting Firefox...")
+	fmt.Println("Extracting chromedriver...")
+	return extractZip(tempFile.Name(), destDir)
+}
+
+func downloadChrome(url, destDir string) error {
+	// Create destination directory
+	err := os.MkdirAll(destDir, 0755)
+	if err != nil {
+		return fmt.Errorf("could not create directory %s: %v", destDir, err)
+	}
+
+	// Download the zip file
+	fmt.Printf("Downloading Chrome from %s...\n", url)
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("could not download Chrome: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	// Create temporary file
+	tempFile, err := os.CreateTemp("", "chrome-*.zip")
+	if err != nil {
+		return fmt.Errorf("could not create temp file: %v", err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	// Copy download to temp file
+	_, err = io.Copy(tempFile, resp.Body)
+	if err != nil {
+		return fmt.Errorf("could not save download: %v", err)
+	}
+
+	tempFile.Close()
+
+	// Extract the zip file
+	fmt.Println("Extracting Chrome...")
 	return extractZip(tempFile.Name(), destDir)
 }
 
@@ -357,50 +346,53 @@ func extractZip(src, dest string) error {
 func processRequest(config Config) (string, error) {
 	baseURL := ensureProtocol(config.URL)
 
-	// Get Firefox and geckodriver paths
+	// Get Chrome path (system or downloaded)
+	chromeExec, err := getChromePath()
+	if err != nil {
+		return "", fmt.Errorf("could not get Chrome path: %v", err)
+	}
+
+	// Get chromedriver path
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("could not get home directory: %v", err)
 	}
 
-	firefoxDir := filepath.Join(homeDir, ".web-firefox")
-	geckoDriverPath := filepath.Join(firefoxDir, "geckodriver", "geckodriver")
+	chromeDir := filepath.Join(homeDir, ".web-chrome")
 
-	var firefoxExec string
+	var chromeDriverPath string
 	switch runtime.GOOS {
 	case "darwin":
-		firefoxExec = filepath.Join(firefoxDir, "firefox", "Nightly.app", "Contents", "MacOS", "firefox")
+		if runtime.GOARCH == "arm64" {
+			chromeDriverPath = filepath.Join(chromeDir, "chromedriver", "chromedriver-mac-arm64", "chromedriver")
+		} else {
+			chromeDriverPath = filepath.Join(chromeDir, "chromedriver", "chromedriver-mac-x64", "chromedriver")
+		}
 	case "linux":
-		firefoxExec = filepath.Join(firefoxDir, "firefox", "firefox", "firefox")
+		chromeDriverPath = filepath.Join(chromeDir, "chromedriver", "chromedriver-linux64", "chromedriver")
 	}
 
-	// Start geckodriver service
-	service, err := selenium.NewGeckoDriverService(geckoDriverPath, 4444)
+	// Start chromedriver service
+	service, err := selenium.NewChromeDriverService(chromeDriverPath, 4444)
 	if err != nil {
-		return "", fmt.Errorf("could not start geckodriver service: %v", err)
+		return "", fmt.Errorf("could not start chromedriver service: %v", err)
 	}
 	defer service.Stop()
 
-	// Configure Firefox with profile
-	profileDir := filepath.Join(homeDir, ".web-firefox", "profiles", config.Profile)
+	// Configure Chrome with profile
+	profileDir := filepath.Join(homeDir, ".web-chrome", "profiles", config.Profile)
 	os.MkdirAll(profileDir, 0755)
 
 	caps := selenium.Capabilities{
-		"browserName": "firefox",
-		"moz:firefoxOptions": map[string]interface{}{
-			"binary": firefoxExec,
-			"args":   []string{"-headless", "-profile", profileDir},
-			"prefs": map[string]interface{}{
-				"devtools.console.stdout.content": true,
-			},
-			"log": map[string]interface{}{
-				"level": "trace",
-			},
+		"browserName": "chrome",
+		"goog:chromeOptions": map[string]interface{}{
+			"binary": chromeExec,
+			"args":   []string{"--headless=new", "--disable-gpu", "--no-sandbox", fmt.Sprintf("--user-data-dir=%s", profileDir)},
 		},
 	}
 
 	// Create WebDriver
-	wd, err := selenium.NewRemote(caps, fmt.Sprintf("http://localhost:%d", 4444))
+	wd, err := selenium.NewRemote(caps, fmt.Sprintf("http://localhost:%d/wd/hub", 4444))
 	if err != nil {
 		return "", fmt.Errorf("could not create webdriver: %v", err)
 	}
