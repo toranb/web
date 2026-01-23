@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -166,10 +167,94 @@ func ensureChrome() error {
 	return nil
 }
 
+func getChromeVersion() (string, error) {
+	chromePath, err := getChromePath()
+	if err != nil {
+		return "", err
+	}
+
+	// Try to get version from system Chrome first
+	cmd := exec.Command(chromePath, "--version")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get Chrome version: %v", err)
+	}
+
+	// Parse version from output like "Google Chrome 143.0.7499.41"
+	versionStr := strings.TrimSpace(string(output))
+	parts := strings.Fields(versionStr)
+	if len(parts) < 3 {
+		return "", fmt.Errorf("unexpected Chrome version format: %s", versionStr)
+	}
+
+	version := parts[len(parts)-1] // Get last field which is the version
+	// Extract major.minor.build (e.g., "143.0.7499" from "143.0.7499.41")
+	versionParts := strings.Split(version, ".")
+	if len(versionParts) < 3 {
+		return "", fmt.Errorf("unexpected version format: %s", version)
+	}
+
+	// Get available ChromeDriver version from Chrome for Testing API
+	majorVersion := versionParts[0]
+	return getChromeDriverVersion(majorVersion)
+}
+
+func getChromeDriverVersion(majorVersion string) (string, error) {
+	// Try the last-known-good-versions endpoint first (more recent)
+	url := fmt.Sprintf("https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json")
+	resp, err := http.Get(url)
+	if err == nil {
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err == nil {
+			content := string(body)
+			// Look for stable channel version
+			searchStr := fmt.Sprintf(`"Stable":{"version":"%s.`, majorVersion)
+			if strings.Contains(content, searchStr) {
+				start := strings.Index(content, searchStr)
+				if start != -1 {
+					start += len(`"Stable":{"version":"`)
+					end := strings.Index(content[start:], `"`)
+					if end != -1 {
+						version := content[start : start+end]
+						return version, nil
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback to default version map
+	return getDefaultVersionForMajor(majorVersion), nil
+}
+
+func getDefaultVersionForMajor(majorVersion string) string {
+	// Known good default versions for common major releases
+	defaults := map[string]string{
+		"143": "143.0.7499.40",
+		"142": "142.0.7462.93",
+		"141": "141.0.7390.77",
+	}
+	if version, ok := defaults[majorVersion]; ok {
+		return version
+	}
+	// Fallback to latest known
+	return "143.0.7499.40"
+}
+
 func ensureChromedriver() error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("could not get home directory: %v", err)
+	}
+
+	// Get Chrome version dynamically
+	chromeDriverVersion, err := getChromeVersion()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not detect Chrome version, using default: %v\n", err)
+		chromeDriverVersion = "143.0.7498.82"
+	} else {
+		fmt.Printf("Detected Chrome version, using ChromeDriver %s\n", chromeDriverVersion)
 	}
 
 	chromeDriverDir := filepath.Join(homeDir, ".web-chrome", "chromedriver")
@@ -180,14 +265,14 @@ func ensureChromedriver() error {
 	case "darwin":
 		if runtime.GOARCH == "arm64" {
 			chromeDriverExec = filepath.Join(chromeDriverDir, "chromedriver-mac-arm64", "chromedriver")
-			chromeDriverUrl = "https://storage.googleapis.com/chrome-for-testing-public/141.0.7390.77/mac-arm64/chromedriver-mac-arm64.zip"
+			chromeDriverUrl = fmt.Sprintf("https://storage.googleapis.com/chrome-for-testing-public/%s/mac-arm64/chromedriver-mac-arm64.zip", chromeDriverVersion)
 		} else {
 			chromeDriverExec = filepath.Join(chromeDriverDir, "chromedriver-mac-x64", "chromedriver")
-			chromeDriverUrl = "https://storage.googleapis.com/chrome-for-testing-public/141.0.7390.77/mac-x64/chromedriver-mac-x64.zip"
+			chromeDriverUrl = fmt.Sprintf("https://storage.googleapis.com/chrome-for-testing-public/%s/mac-x64/chromedriver-mac-x64.zip", chromeDriverVersion)
 		}
 	case "linux":
 		chromeDriverExec = filepath.Join(chromeDriverDir, "chromedriver-linux64", "chromedriver")
-		chromeDriverUrl = "https://storage.googleapis.com/chrome-for-testing-public/141.0.7390.77/linux64/chromedriver-linux64.zip"
+		chromeDriverUrl = fmt.Sprintf("https://storage.googleapis.com/chrome-for-testing-public/%s/linux64/chromedriver-linux64.zip", chromeDriverVersion)
 	default:
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
